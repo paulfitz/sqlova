@@ -34,6 +34,7 @@ import argparse, os
 from sqlnet.dbengine import DBEngine
 from sqlova.utils.utils_wikisql import *
 from train import construct_hyper_param, get_models
+from wikisql.lib.query import Query
 
 # This is a stripped down version of the test() method in train.py - identical, except:
 #   - does not attempt to measure accuracy and indeed does not expect the data to be labelled.
@@ -78,13 +79,17 @@ def predict(data_loader, data_table, model, model_bert, bert_config, tokenizer,
             pr_wv_str_wp=None
 
         pr_sql_q = generate_sql_q(pr_sql_i, tb)
+        pr_sql_q_base = generate_sql_q_base(pr_sql_i, tb)
 
-        for b, (pr_sql_i1, pr_sql_q1) in enumerate(zip(pr_sql_i, pr_sql_q)):
+        for b, (pr_sql_i1, pr_sql_q1, pr_sql_q1_base) in enumerate(zip(pr_sql_i, pr_sql_q, pr_sql_q_base)):
             results1 = {}
             results1["query"] = pr_sql_i1
             results1["table_id"] = tb[b]["id"]
             results1["nlu"] = nlu[b]
             results1["sql"] = pr_sql_q1
+            results1["sql_with_params"] = pr_sql_q1_base
+            rr = engine.execute_query(tb[b]["id"], Query.from_dict(pr_sql_i1, ordered=True), lower=False)
+            results1["answer"] = rr
             results.append(results1)
 
     return results
@@ -95,7 +100,7 @@ parser.add_argument("--model_file", required=True, help='model file to use (e.g.
 parser.add_argument("--bert_model_file", required=True, help='bert model file to use (e.g. model_bert_best.pt)')
 parser.add_argument("--bert_path", required=True, help='path to bert files (bert_config*.json etc)')
 parser.add_argument("--data_path", required=True, help='path to *.jsonl and *.db files')
-parser.add_argument("--split", required=True, help='prefix of jsonl and db files (e.g. dev)')
+parser.add_argument("--split", required=False, help='prefix of jsonl and db files (e.g. dev)')
 parser.add_argument("--result_path", required=True, help='directory in which to place results')
 args = construct_hyper_param(parser)
 
@@ -108,30 +113,113 @@ path_model = args.model_file
 args.no_pretraining = True  # counterintuitive, but avoids loading unused models
 model, model_bert, tokenizer, bert_config = get_models(args, BERT_PT_PATH, trained=True, path_model_bert=path_model_bert, path_model=path_model)
 
-# Load data
-dev_data, dev_table = load_wikisql_data(args.data_path, mode=args.split, toy_model=args.toy_model, toy_size=args.toy_size, no_hs_tok=True)
-dev_loader = torch.utils.data.DataLoader(
-    batch_size=args.bS,
-    dataset=dev_data,
-    shuffle=False,
-    num_workers=1,
-    collate_fn=lambda x: x  # now dictionary values are not merged!
-)
+def run_split(split):
+    # Load data
+    dev_data, dev_table = load_wikisql_data(args.data_path, mode=split, toy_model=args.toy_model, toy_size=args.toy_size, no_hs_tok=True)
+    dev_loader = torch.utils.data.DataLoader(
+        batch_size=args.bS,
+        dataset=dev_data,
+        shuffle=False,
+        num_workers=1,
+        collate_fn=lambda x: x  # now dictionary values are not merged!
+    )
 
-# Run prediction
-with torch.no_grad():
-    results = predict(dev_loader,
-                      dev_table,
-                      model,
-                      model_bert,
-                      bert_config,
-                      tokenizer,
-                      args.max_seq_length,
-                      args.num_target_layers,
-                      detail=False,
-                      path_db=args.data_path,
-                      st_pos=0,
-                      dset_name=args.split, EG=args.EG)
+    # Run prediction
+    with torch.no_grad():
+        results = predict(dev_loader,
+                          dev_table,
+                          model,
+                          model_bert,
+                          bert_config,
+                          tokenizer,
+                          args.max_seq_length,
+                          args.num_target_layers,
+                          detail=False,
+                          path_db=args.data_path,
+                          st_pos=0,
+                          dset_name=split, EG=args.EG)
 
-# Save results
-save_for_evaluation(path_save_for_evaluation, results, args.split)
+    # Save results
+    save_for_evaluation(path_save_for_evaluation, results, split)
+    message = {
+        "split": split,
+        "result": results
+    }
+    return message
+
+def serialize(o):
+    if isinstance(o, int64):
+        return int(o)
+
+if args.split:
+    message = run_split(args.split)
+    print("MESSAGE", message)
+    json.dumps(message, indent=2, default=serialize)
+    exit(0)
+
+
+import annotate_ws
+import add_csv
+import add_question
+from flask import Flask, request
+from flask import jsonify
+import io
+import uuid
+import re
+app = Flask(__name__)
+@app.route('/', methods=['POST'])
+def result():
+    debug = 'debug' in request.form
+    base = ""
+    try:
+        if not 'csv' in request.files:
+            raise Exception('please include a csv file')
+        if not 'q' in request.form:
+            raise Exception('please include a q parameter with a question in it')
+        csv = request.files['csv']
+        q = request.form['q']
+        table_id = os.path.splitext(csv.filename)[0]
+        table_id = re.sub(r'\W+', '_', table_id)
+
+        # it would be easy to do all this in memory but I'm lazy
+        stream = io.StringIO(csv.stream.read().decode("UTF8"), newline=None)
+        base = table_id + "_" + str(uuid.uuid4())
+        add_csv.csv_stream_to_sqlite(table_id, stream, base + '.db')
+        stream.seek(0)
+        record = add_csv.csv_stream_to_json(table_id, stream, base + '.tables.jsonl')
+        stream.seek(0)
+        add_question.question_to_json(table_id, q, base + '.jsonl')
+        annotation = annotate_ws.annotate_example_ws(add_question.encode_question(table_id, q),
+                                                     record)
+        with open(base + '_tok.jsonl', 'a+') as fout:
+            fout.write(json.dumps(annotation) + '\n')
+
+        message = run_split(base)
+        code = 200
+
+        if not debug:
+            os.remove(base + '.db')
+            os.remove(base + '.jsonl')
+            os.remove(base + '.tables.jsonl')
+            os.remove(base + '_tok.jsonl')
+            os.remove('results_' + base + '.jsonl')
+            if 'result' in message:
+                message = message['result'][0]
+                del message['query']
+                del message['nlu']
+                del message['table_id']
+                message['params'] = message['sql_with_params'][1]
+                message['sql'] = message['sql_with_params'][0]
+                del message['sql_with_params']
+
+    except Exception as e:
+        message = { "error": str(e) }
+        code = 500
+
+    if debug:
+        message['base'] = base
+
+    return jsonify(message), code
+
+print("DID FLASK")
+app.run(host='0.0.0.0', port=5050)

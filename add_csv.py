@@ -14,36 +14,43 @@ from sqlalchemy import Column, create_engine, MetaData, String, Table
 def get_table_name(table_id):
     return 'table_{}'.format(table_id)
 
-def csv_to_sqlite(table_id, csv_file_name, sqlite_file_name):
+def csv_stream_to_sqlite(table_id, f, sqlite_file_name):
     engine = create_engine('sqlite:///{}'.format(sqlite_file_name))
-    with open(csv_file_name) as f:
-        metadata = MetaData(bind=engine)
-        cf = csv.DictReader(f, delimiter=',')
-        simple_name = dict([(name, 'col%d' % i) for i, name in enumerate(cf.fieldnames)])
-        table = Table(get_table_name(table_id), metadata,
-                      *(Column(simple_name[name], String())
-                        for name in cf.fieldnames))
-        table.drop(checkfirst=True)
-        table.create()
-        for row in cf:
-            row = dict((simple_name[name], val) for name, val in row.items())
-            table.insert().values(**row).execute()
+    metadata = MetaData(bind=engine)
+    cf = csv.DictReader(f, delimiter=',')
+    simple_name = dict([(name, 'col%d' % i) for i, name in enumerate(cf.fieldnames)])
+    table = Table(get_table_name(table_id), metadata,
+                  *(Column(simple_name[name], String())
+                    for name in cf.fieldnames))
+    table.drop(checkfirst=True)
+    table.create()
+    for row in cf:
+        row = dict((simple_name[name], val) for name, val in row.items())
+        table.insert().values(**row).execute()
     return engine
+
+def csv_to_sqlite(table_id, csv_file_name, sqlite_file_name):
+    with open(csv_file_name) as f:
+        return csv_stream_to_sqlite(table_id, f, sqlite_file_name)
+
+def csv_stream_to_json(table_id, f, json_file_name):
+    cf = csv.DictReader(f, delimiter=',')
+    record = {}
+    record['header'] = [(name or 'col{}'.format(i)) for i, name in enumerate(cf.fieldnames)]
+    record['page_title'] = None
+    record['types'] = ['text'] * len(cf.fieldnames)
+    record['id'] = table_id
+    record['caption'] = None
+    record['rows'] = [list(row.values()) for row in cf]
+    record['name'] = get_table_name(table_id)
+    with open(json_file_name, 'a+') as fout:
+        json.dump(record, fout)
+        fout.write('\n')
+    return record
 
 def csv_to_json(table_id, csv_file_name, json_file_name):
     with open(csv_file_name) as f:
-        cf = csv.DictReader(f, delimiter=',')
-        record = {}
-        record['header'] = [(name or 'col{}'.format(i)) for i, name in enumerate(cf.fieldnames)]
-        record['page_title'] = None
-        record['types'] = ['text'] * len(cf.fieldnames)
-        record['id'] = table_id
-        record['caption'] = None
-        record['rows'] = [list(row.values()) for row in cf]
-        record['name'] = get_table_name(table_id)
-        with open(json_file_name, 'a+') as fout:
-            json.dump(record, fout)
-            fout.write('\n')
+        csv_stream_to_json(table_id, f, json_file_name)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

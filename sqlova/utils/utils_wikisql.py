@@ -1811,7 +1811,29 @@ def generate_sql_q(sql_i, tb):
 
     return sql_q
 
+def generate_sql_q_base(sql_i, tb):
+    sql_q = []
+    for b, sql_i1 in enumerate(sql_i):
+        tb1 = tb[b]
+        sql_q1, sql_p1 = generate_sql_q1_base(sql_i1, tb1)
+        sql_q.append([sql_q1, sql_p1])
+
+    return sql_q
+
 def generate_sql_q1(sql_i1, tb1):
+    q, params = generate_sql_q1_base(sql_i1, tb1)
+    # for compatiblity, substitute text naively
+    parts = q.split('?')
+    parts.reverse()
+    result = []
+    for param in params:
+        result.append(parts.pop())
+        result.append(param)
+    while len(parts):
+        result.append(parts.pop())
+    return "".join(result)
+
+def generate_sql_q1_base(sql_i1, tb1):
     """
         sql = {'sel': 5, 'agg': 4, 'conds': [[3, 0, '59']]}
         agg_ops = ['', 'max', 'min', 'count', 'sum', 'avg']
@@ -1837,7 +1859,7 @@ def generate_sql_q1(sql_i1, tb1):
     select_agg = agg_ops[sql_i1['agg']]
     select_header = headers[sql_i1['sel']]
     sql_query_part1 = f'SELECT {select_agg}({select_header}) '
-
+    params = []
 
     where_num = len(sql_i1['conds'])
     if where_num == 0:
@@ -1858,12 +1880,13 @@ def generate_sql_q1(sql_i1, tb1):
                 sql_query_part2 += ' AND'
                 # sql_plus_query_part2 += ' AND'
 
-            sql_query_part2 += f" {where_header} {where_op} {where_str}"
+            sql_query_part2 += f" {where_header} {where_op} ?"
+            params.append(where_str)
 
     sql_query = sql_query_part1 + sql_query_part2
     # sql_plus_query = sql_plus_query_part1 + sql_plus_query_part2
 
-    return sql_query
+    return sql_query, params
 
 
 def get_pnt_idx1(col_pool_type, st_ed):

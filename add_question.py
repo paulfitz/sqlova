@@ -25,13 +25,16 @@ from sqlalchemy.exc import ArgumentError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import create_session, mapper
 
-def question_to_json(table_id, question, json_file_name):
-    record = {
+def encode_question(table_id, question):
+    return {
         'phase': 1,
         'table_id': table_id,
         'question': question,
         'sql': {'sel': 0, 'conds': [], 'agg': 0}
     }
+
+def question_to_json(table_id, question, json_file_name):
+    record = encode_question(table_id, question)
     with open(json_file_name, 'a+') as fout:
         json.dump(record, fout)
         fout.write('\n')

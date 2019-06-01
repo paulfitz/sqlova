@@ -3,7 +3,6 @@ from collections import defaultdict
 from copy import deepcopy
 import re
 
-
 re_whitespace = re.compile(r'\s+', flags=re.UNICODE)
 
 

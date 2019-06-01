@@ -54,7 +54,7 @@ class DBEngine:
                     except:
                         # Although column is of number, selected one is not number. Do nothing in this case.
                         pass
-            where_clause.append('col{} {} :col{}'.format(col_index, cond_ops[op], col_index))
+            where_clause.append('lower(col{}) {} lower(:col{})'.format(col_index, cond_ops[op], col_index))
             where_map['col{}'.format(col_index)] = val
         where_str = ''
         if where_clause:
