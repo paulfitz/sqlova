@@ -36,6 +36,45 @@ from sqlova.utils.utils_wikisql import *
 from train import construct_hyper_param, get_models
 from wikisql.lib.query import Query
 
+import annotate_ws
+import add_csv
+import add_question
+from flask import Flask, request
+from flask import jsonify
+import io
+import uuid
+import re
+
+## Set up hyper parameters and paths
+parser = argparse.ArgumentParser()
+parser.add_argument("--model_file", required=True, help='model file to use (e.g. model_best.pt)')
+parser.add_argument("--bert_model_file", required=True, help='bert model file to use (e.g. model_bert_best.pt)')
+parser.add_argument("--bert_path", required=True, help='path to bert files (bert_config*.json etc)')
+parser.add_argument("--data_path", required=True, help='path to *.jsonl and *.db files')
+parser.add_argument("--split", required=False, help='prefix of jsonl and db files (e.g. dev)')
+parser.add_argument("--result_path", required=True, help='directory in which to place results')
+args = construct_hyper_param(parser)
+
+handle_request = None
+
+import threading
+thread = None
+
+if not args.split:
+    app = Flask(__name__)
+    @app.route('/', methods=['POST'])
+    def run():
+        if handle_request:
+            return handle_request(request)
+        else:
+            return jsonify({"error": "Loading model, please wait"}), 503
+    def start():
+        app.run(host='0.0.0.0', port=5050)
+    thread = threading.Thread(target=start, args=())
+    thread.daemon = True
+    thread.start()
+
+    
 # This is a stripped down version of the test() method in train.py - identical, except:
 #   - does not attempt to measure accuracy and indeed does not expect the data to be labelled.
 #   - saves plain text sql queries.
@@ -94,15 +133,6 @@ def predict(data_loader, data_table, model, model_bert, bert_config, tokenizer,
 
     return results
 
-## Set up hyper parameters and paths
-parser = argparse.ArgumentParser()
-parser.add_argument("--model_file", required=True, help='model file to use (e.g. model_best.pt)')
-parser.add_argument("--bert_model_file", required=True, help='bert model file to use (e.g. model_bert_best.pt)')
-parser.add_argument("--bert_path", required=True, help='path to bert files (bert_config*.json etc)')
-parser.add_argument("--data_path", required=True, help='path to *.jsonl and *.db files')
-parser.add_argument("--split", required=False, help='prefix of jsonl and db files (e.g. dev)')
-parser.add_argument("--result_path", required=True, help='directory in which to place results')
-args = construct_hyper_param(parser)
 
 BERT_PT_PATH = args.bert_path
 path_save_for_evaluation = args.result_path
@@ -153,22 +183,11 @@ def serialize(o):
 
 if args.split:
     message = run_split(args.split)
-    print("MESSAGE", message)
     json.dumps(message, indent=2, default=serialize)
     exit(0)
 
 
-import annotate_ws
-import add_csv
-import add_question
-from flask import Flask, request
-from flask import jsonify
-import io
-import uuid
-import re
-app = Flask(__name__)
-@app.route('/', methods=['POST'])
-def result():
+def handle_request0(request):
     debug = 'debug' in request.form
     base = ""
     try:
@@ -221,5 +240,5 @@ def result():
 
     return jsonify(message), code
 
-print("DID FLASK")
-app.run(host='0.0.0.0', port=5050)
+handle_request = handle_request0
+thread.join()

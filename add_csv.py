@@ -9,25 +9,51 @@
 # stored in the column.
 
 import argparse, csv, json, os
-from sqlalchemy import Column, create_engine, MetaData, String, Table
+import records
 
 def get_table_name(table_id):
     return 'table_{}'.format(table_id)
 
 def csv_stream_to_sqlite(table_id, f, sqlite_file_name):
-    engine = create_engine('sqlite:///{}'.format(sqlite_file_name))
-    metadata = MetaData(bind=engine)
+    db = records.Database('sqlite:///{}'.format(sqlite_file_name))
     cf = csv.DictReader(f, delimiter=',')
-    simple_name = dict([(name, 'col%d' % i) for i, name in enumerate(cf.fieldnames)])
-    table = Table(get_table_name(table_id), metadata,
-                  *(Column(simple_name[name], String())
-                    for name in cf.fieldnames))
-    table.drop(checkfirst=True)
-    table.create()
-    for row in cf:
-        row = dict((simple_name[name], val) for name, val in row.items())
-        table.insert().values(**row).execute()
-    return engine
+    columns = [f'col{i}' for i in range(len(cf.fieldnames))]
+    simple_name = dict(zip(cf.fieldnames, columns))
+    rows = [dict((simple_name[name], val) for name, val in row.items())
+            for row in cf]
+    types = {}
+    for name in columns:
+        good_float = 0
+        bad_float = 0
+        good_int = 0
+        bad_int = 0
+        for row in rows:
+            val = row[name]
+            try:
+                float(val)
+                good_float += 1
+            except:
+                bad_float += 1
+            try:
+                int(val)
+                good_int += 1
+            except:
+                bad_int += 1
+        if good_int >= 2 * bad_int and good_int >= good_float:
+            types[name] = 'integer'
+        elif good_float >= 2 * bad_float and good_float > 0:
+            types[name] = 'real'
+        else:
+            types[name] = 'text'
+    schema = ', '.join([f'{name} {types[name]}' for name in columns])
+    tname = get_table_name(table_id)
+    db.query(f'DROP TABLE IF EXISTS {tname}')
+    db.query(f'CREATE TABLE {tname} ({schema})')
+    ccolumns = [f':{name}' for name in columns]
+    print(f'INSERT INTO {tname}({",".join(columns)}) VALUES({",".join(ccolumns)})')
+    db.bulk_query(f'INSERT INTO {tname}({",".join(columns)}) VALUES({",".join(ccolumns)})',
+                  rows)
+    return True
 
 def csv_to_sqlite(table_id, csv_file_name, sqlite_file_name):
     with open(csv_file_name) as f:
