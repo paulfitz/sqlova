@@ -59,6 +59,7 @@ handle_request = None
 
 import threading
 thread = None
+status = "Loading sqlova model, please wait"
 
 if not args.split:
     app = Flask(__name__)
@@ -67,7 +68,7 @@ if not args.split:
         if handle_request:
             return handle_request(request)
         else:
-            return jsonify({"error": "Loading model, please wait"}), 503
+            return jsonify({"error": status}), 503
     def start():
         app.run(host='0.0.0.0', port=5050)
     thread = threading.Thread(target=start, args=())
@@ -239,6 +240,9 @@ def handle_request0(request):
         message['base'] = base
 
     return jsonify(message), code
+
+status = "Loading corenlp models, please wait"
+annotate_ws.annotate('start up please')
 
 handle_request = handle_request0
 thread.join()
